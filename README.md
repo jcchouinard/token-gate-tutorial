@@ -1,164 +1,54 @@
-# Cut Claude Code token use by gating big file reads
+# token-gate
 
-A standalone, copy-paste version of the idea behind
-[shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt)
-(spotify/portal-ai-plugins). Shunt blocks large file reads with a hook and
-delegates them to a cheaper model. The original needs Spotify's Portal and AiKA.
-This version uses only a hook plus a built-in Claude Code subagent on Haiku.
+Cut Claude Code token use by blocking full reads of big files, and sending that work
+to a cheap Haiku subagent instead. A lightweight, standalone take on the idea behind
+Spotify's [shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt)
+plugin (Apache-2.0), with no Spotify dependencies.
 
-Status: the hook scripts are tested with fake input (`scripts/test-hooks.sh`).
-No savings figures are published here on purpose: savings depend on your files and model,
-so steps 1 and 7 ask you to measure your own.
-Hook details change between Claude Code versions, so check the
-[hooks docs](https://docs.claude.com/en/docs/claude-code/hooks) before publishing.
+## Use it
 
-## Folder layout
-
-```
-token-gate-tutorial/
-  README.md                      this tutorial
-  scripts/make-big-file.sh       generates demo/big.py (4000 lines) and demo/small.py
-  scripts/test-hooks.sh          tests the hooks without Claude
-  demo/.claude/
-    settings.json                registers the hooks
-    hooks/check-file-size        blocks full Read of big files
-    hooks/check-bash-read        optional: blocks cat/head/tail of big files
-    agents/file-summarizer.md    the cheap alternative (Haiku subagent)
-```
-
-## 1. The problem: measure a baseline first
-
-Claude reads whole files into context, and every later turn pays for them again.
+1. Install `jq` (macOS: `brew install jq`, Debian/Ubuntu: `sudo apt install jq`).
+2. Clone and install into your project:
 
 ```bash
-brew install jq                       # macOS. Debian/Ubuntu: sudo apt install jq
-./scripts/make-big-file.sh            # creates demo/big.py
+git clone https://github.com/jcchouinard/token-gate-tutorial.git
+cd token-gate-tutorial
+./install.sh /path/to/your/project      # or: ./install.sh --global
 ```
 
-To get a true baseline, run it **without** the hooks. Temporarily move the settings file:
+3. Restart Claude Code in that project. Done.
 
-```bash
-cd demo
-mv .claude/settings.json .claude/settings.json.off
-claude
-```
+## What you get
 
-Ask: `Summarize big.py`, then run `/context` (and `/cost`). Write the numbers in the
-table in step 7. Exit, then restore the file:
+- `.claude/hooks/check-file-size`: a PreToolUse hook that blocks a full `Read` of any file
+  over 350 lines (exit code 2, with a message telling Claude what to do instead).
+  Reads with `offset` or `limit`, small files and missing files are allowed.
+- `.claude/hooks/check-bash-read`: optional, stops `cat`, `head`, `tail`, `less`, `more` on
+  big files from dodging the gate.
+- `.claude/agents/file-summarizer.md`: a read-only Haiku subagent. Big reads happen in its
+  own context and only a short answer returns to your main conversation.
 
-```bash
-mv .claude/settings.json.off .claude/settings.json
-```
+`install.sh` copies these into `.claude/` and merges the hook registration into your
+existing `settings.json` (it is safe to run twice).
 
-## 2. The size-gate hook
-
-`demo/.claude/hooks/check-file-size` is a PreToolUse hook for the `Read` tool.
-
-- Targeted reads (`offset` or `limit` set): allowed.
-- Small files, or missing files: allowed.
-- Full reads over `MIN_LINES` (default 350): blocked with exit code 2. Claude Code
-  feeds the stderr message back to Claude, which then changes approach.
-
-Shunt returns JSON (`{"decision": "block", ...}`) instead. Exit code 2 with stderr
-is the simpler contract to explain, and it is a documented way to block a tool call.
-
-## 3. Test the hooks without Claude
-
-```bash
-./scripts/test-hooks.sh
-```
-
-Expected: `11 passed, 0 failed`. It feeds fake tool input to each hook and checks
-the exit code (2 blocks, 0 allows). You can also try one by hand:
-
-```bash
-cd demo
-echo '{"tool_input":{"file_path":"big.py"}}' | .claude/hooks/check-file-size; echo "exit=$?"
-```
-
-## 4. Register the hooks
-
-Already done in `demo/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Read", "hooks": [ { "type": "command",
-        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-file-size" } ] },
-      { "matcher": "Bash", "hooks": [ { "type": "command",
-        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-bash-read" } ] }
-    ]
-  }
-}
-```
-
-The Bash hook is optional. It stops Claude from sidestepping the Read hook with
-`cat`, `head` or `tail`. Pipes and redirections are let through. Delete the second
-block if you only want the Read gate.
-
-To use this in your own project, copy `demo/.claude/` into it.
-
-## 5. Give Claude a cheap alternative
-
-Without an alternative, Claude is just blocked. `demo/.claude/agents/file-summarizer.md`
-is a Haiku subagent with read-only tools. The big read happens in its own context,
-and only a short answer returns to your main context. (Same idea as shunt's
-`bulk-reader`.)
-
-## 6. Try it live
-
-```bash
-cd demo
-claude
-```
-
-Then ask: `Summarize big.py`. You should see the Read get blocked, then Claude either
-greps and reads a slice, or calls `file-summarizer`. Check it with `/hooks` and `/agents`
-if nothing happens. Hooks load at session start, so restart Claude after editing settings.
-
-## 7. Measure the savings
-
-Ask the same question as the baseline in a fresh session, then run `/context` and `/cost`.
-Run 3 or 4 scenarios and report **your own** numbers (shunt's 82 to 94% came from a
-4,000+ line Java monorepo with a different delegate).
-
-| Scenario | Lines | Without gate (tokens) | With gate (tokens) | Savings |
-|----------|-------|-----------------------|--------------------|---------|
-| One large file ("Summarize big.py") | 4,000 | | | |
-| Targeted question ("Which functions multiply by 100?") | 4,000 | | | |
-| Source + test pair | | | | |
-| Several files | | | | |
-
-## 8. When not to delegate
-
-Keep these with the main model (from shunt's README):
-
-- Editing: Claude needs the exact text. Use the escape hatch: re-read just the
-  section with `offset` and `limit`.
-- Debugging.
-- Architecture decisions.
-- Small files: the overhead costs more than it saves.
-
-## 9. Wrap-up tips
+## Tune it
 
 - Change the threshold: `MIN_LINES=200 claude`
-- Use `/compact` and `/clear` between tasks.
-- Put project facts in `CLAUDE.md` so Claude does not rediscover them each session.
-- Credit: inspired by [spotify/portal-ai-plugins (shunt)](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt), Apache-2.0.
-  This version is a simplified rewrite with no Portal or AiKA dependency.
+- Remove the Bash hook: delete its entry from `.claude/settings.json`.
+- Editing a big file? Claude can still read the section it needs with `offset` and `limit`.
+- Keep small files, debugging and architecture work with the main model: delegation costs
+  more than it saves there.
 
-## Sources and further reading
+## Check it works
 
-- Original code: [spotify/portal-ai-plugins](https://github.com/spotify/portal-ai-plugins) on GitHub (the shunt plugin lives in `plugins/shunt`)
-- Claude Code [hooks documentation](https://docs.claude.com/en/docs/claude-code/hooks)
+In Claude Code run `/hooks` to see the registered hooks. Ask Claude to summarize a file
+over 350 lines: the full read should be blocked, then Claude greps, reads a slice, or calls
+`file-summarizer`. Measure your own savings with `/context` and `/cost`, in dollars rather
+than raw tokens. Results vary with your files and model, so no figures are promised here.
+Hook behavior can change between Claude Code versions: see the
+[hooks docs](https://docs.claude.com/en/docs/claude-code/hooks).
 
-## Differences from shunt
+## Credit
 
-| | shunt | this tutorial |
-|---|---|---|
-| Delegate | AiKA modes via Portal CLI | Haiku subagent, built in |
-| Block signal | JSON `decision` | exit code 2 + stderr |
-| Delivery | plugin | copy `.claude/` folder |
-| Code generation (`code-writer`) | yes | not included |
-| Threshold env var | `SHUNT_MIN_LINES` | `MIN_LINES` |
+Inspired by [spotify/portal-ai-plugins (shunt)](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt),
+Apache-2.0. This is an independent, simplified rewrite. MIT licensed.
