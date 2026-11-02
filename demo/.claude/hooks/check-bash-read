@@ -1,0 +1,28 @@
+#!/bin/bash
+# OPTIONAL: catch cat/head/tail/less/more on big files (they bypass the Read hook).
+
+MIN_LINES="${MIN_LINES:-350}"
+case "$MIN_LINES" in ''|*[!0-9]*) MIN_LINES=350 ;; esac
+
+input=$(cat)
+command=$(echo "$input" | jq -r '.tool_input.command // empty')
+[ -z "$command" ] && exit 0
+
+# Pipes and redirections are targeted or not read into context
+echo "$command" | grep -qE '[|>]' && exit 0
+
+echo "$command" | grep -qE '^(cat|head|tail|less|more) ' || exit 0
+# First argument that is an existing file (skips flags and values like "-n 50")
+file=""
+for arg in $(echo "$command" | sed -E 's/^(cat|head|tail|less|more) +//'); do
+  a=$(echo "$arg" | tr -d "\"'")
+  [ -f "$a" ] && { file="$a"; break; }
+done
+[ -z "$file" ] && exit 0
+
+lines=$(wc -l < "$file" | tr -d ' ')
+if [ "$lines" -gt "$MIN_LINES" ]; then
+  echo "File is ${lines} lines (threshold ${MIN_LINES}). Use grep, or the file-summarizer subagent, instead of cat/head/tail." >&2
+  exit 2
+fi
+exit 0

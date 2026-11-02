@@ -1,0 +1,22 @@
+#!/bin/bash
+# Block full-file Read calls on big files. Inspired by spotify/portal-ai-plugins (shunt).
+# Exit 0 = allow. Exit 2 = block, stderr is sent back to Claude.
+
+MIN_LINES="${MIN_LINES:-350}"
+case "$MIN_LINES" in ''|*[!0-9]*) MIN_LINES=350 ;; esac
+
+input=$(cat)
+file=$(echo "$input"   | jq -r '.tool_input.file_path // empty')
+offset=$(echo "$input" | jq -r '.tool_input.offset // empty')
+limit=$(echo "$input"  | jq -r '.tool_input.limit // empty')
+
+# Allow targeted reads (Claude already knows what it needs)
+if [ -n "$offset" ] || [ -n "$limit" ]; then exit 0; fi
+# Allow missing files (let Read report the error)
+if [ -z "$file" ] || [ ! -f "$file" ]; then exit 0; fi
+
+lines=$(wc -l < "$file" | tr -d ' ')
+if [ "$lines" -le "$MIN_LINES" ]; then exit 0; fi
+
+echo "File is ${lines} lines (threshold ${MIN_LINES}). Do not read it whole. Either grep for the relevant section and re-read with offset/limit, or delegate to the file-summarizer subagent." >&2
+exit 2

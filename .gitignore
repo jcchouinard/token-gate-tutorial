@@ -1,0 +1,6 @@
+results/
+demo-baseline/
+HANDOVER.md
+demo/big.py
+demo/small.py
+.DS_Store
