@@ -51,4 +51,5 @@ Hook behavior can change between Claude Code versions: see the
 ## Credit
 
 Inspired by [spotify/portal-ai-plugins (shunt)](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt),
+Blog Post by [Spotify Eng](https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90)
 Apache-2.0. This is an independent, simplified rewrite. MIT licensed.
